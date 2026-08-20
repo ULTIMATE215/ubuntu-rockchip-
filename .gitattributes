@@ -1,0 +1,5 @@
+# Patches must keep LF endings. A CRLF patch fails to apply against the
+# kernel's LF sources, and on Windows checkouts core.autocrlf would otherwise
+# rewrite them.
+*.patch -text
+*.diff -text

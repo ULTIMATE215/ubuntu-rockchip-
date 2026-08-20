@@ -1,0 +1,113 @@
+From: ubuntu-rockchip build
+Subject: [PATCH] arm64: dts: rockchip: orangepi-5-plus: more aggressive fan curve
+
+The fan curve inherited from rk3588-orangepi-5.dtsi is very conservative:
+cooling-levels tops out at 100/255 (39% duty), and the fan only starts at
+55 C, so under sustained load the SoC drifts up towards the 85 C passive
+throttling trip while the fan is still barely spinning.
+
+Replace it with a five stage staircase that starts earlier and can reach
+full speed, keeping ~20 C of headroom below the 85 C bigcore/GPU trip:
+
+  package temp   fan state   PWM duty
+  ------------   ---------   --------
+     < 35 C          0        0    (off)
+      35 C           1        80   (31%)
+      43 C           2        120  (47%)
+      50 C           3        160  (63%)
+      57 C           4        200  (78%)
+    >= 65 C          5        255  (100%)
+
+Hysteresis is 3 C on every trip, comfortably below the 7-8 C spacing, so
+the states cannot oscillate. Only the board .dts is touched, so the other
+boards sharing rk3588-orangepi-5.dtsi keep the stock curve.
+
+Trade-off: the board idles around 40 C, which is already past the first
+trip, so the fan runs continuously rather than ever stopping. Raise the
+package-fan0 trip if that is too audible.
+
+diff --git a/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus.dts b/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus.dts
+--- a/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus.dts
++++ b/arch/arm64/boot/dts/rockchip/rk3588-orangepi-5-plus.dts
+@@ -117,6 +117,12 @@
+ };
+ 
+ &fan {
++	/*
++	 * PWM duty steps, out of 255. The shared OrangePi 5 dtsi tops out at
++	 * 100 (39%), which never lets the fan spin up; go all the way to 255
++	 * so the SoC can be held well below the 85 C throttling point.
++	 */
++	cooling-levels = <0 80 120 160 200 255>;
+ 	pwms = <&pwm3 0 50000 0>;
+ };
+ 
+@@ -256,6 +262,68 @@
+ 	pwms = <&pwm2 0 25000 0>;
+ };
+ 
++&package_thermal {
++	/* React within half a second instead of one second. */
++	polling-delay = <500>;
++
++	trips {
++		/* Overrides of the two trips defined in rk3588-orangepi-5.dtsi. */
++		package-fan0 {
++			temperature = <35000>;
++			hysteresis = <3000>;
++		};
++
++		package-fan1 {
++			temperature = <43000>;
++			hysteresis = <3000>;
++		};
++
++		package_fan2: package-fan2 {
++			temperature = <50000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		package_fan3: package-fan3 {
++			temperature = <57000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		package_fan4: package-fan4 {
++			temperature = <65000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		/* One fan state per trip, so the curve is a plain staircase. */
++		map0 {
++			cooling-device = <&fan 1 1>;
++		};
++
++		map1 {
++			cooling-device = <&fan 2 2>;
++		};
++
++		map2 {
++			trip = <&package_fan2>;
++			cooling-device = <&fan 3 3>;
++		};
++
++		map3 {
++			trip = <&package_fan3>;
++			cooling-device = <&fan 4 4>;
++		};
++
++		map4 {
++			trip = <&package_fan4>;
++			cooling-device = <&fan 5 5>;
++		};
++	};
++};
++
+ /* phy1 - M.KEY socket */
+ &pcie2x1l0 {
+ 	reset-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
