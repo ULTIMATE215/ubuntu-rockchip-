@@ -1,0 +1,23 @@
+From: ubuntu-rockchip build
+Subject: [PATCH] config: enable PSI for Android containers (Waydroid/lmkd)
+
+Waydroid itself only strictly needs binder/binderfs (already enabled),
+but Android's lmkd relies on Pressure Stall Information (PSI) for memory
+pressure handling since Android 10. Without CONFIG_PSI the container
+still boots, yet low-memory killing degrades to legacy heuristics.
+
+Enable PSI in the rockchip flavour config so kernels built from this
+tree are fully ready for Waydroid/Anbox.
+
+diff --git a/debian.rockchip/config/config.common.ubuntu b/debian.rockchip/config/config.common.ubuntu
+--- a/debian.rockchip/config/config.common.ubuntu
++++ b/debian.rockchip/config/config.common.ubuntu
+@@ -132,7 +132,7 @@ CONFIG_TASKSTATS=y
+ CONFIG_TASK_DELAY_ACCT=y
+ CONFIG_TASK_XACCT=y
+ CONFIG_TASK_IO_ACCOUNTING=y
+-# CONFIG_PSI is not set
++CONFIG_PSI=y
+ # end of CPU/Task time and stats accounting
+
+ CONFIG_CPU_ISOLATION=y
