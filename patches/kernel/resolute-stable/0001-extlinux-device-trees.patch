@@ -1,0 +1,19 @@
+Subject: [PATCH] package: expose the device trees to Ubuntu Rockchip extlinux
+
+Ubuntu Rockchip's u-boot-update looks for /lib/firmware/<release>/device-tree.
+Keep the standard bindeb-pkg device tree directory and link it there.
+
+diff --git a/scripts/package/builddeb b/scripts/package/builddeb
+--- a/scripts/package/builddeb
++++ b/scripts/package/builddeb
+@@ -33,7 +33,10 @@ install_linux_image () {
+ 	# Only some architectures with OF support have this target
+ 	if is_enabled CONFIG_OF_EARLY_FLATTREE && [ -d "${srctree}/arch/${SRCARCH}/boot/dts" ]; then
+ 		${MAKE} -f ${srctree}/Makefile INSTALL_DTBS_PATH="${pdir}/usr/lib/linux-image-${KERNELRELEASE}" dtbs_install
++		firmware="${pdir}/usr/lib/firmware/${KERNELRELEASE}"
++		mkdir -p "${firmware}"
++		ln -s "../../linux-image-${KERNELRELEASE}" "${firmware}/device-tree"
+ 	fi
+ 
+ 	${MAKE} -f ${srctree}/Makefile INSTALL_MOD_PATH="${pdir}" INSTALL_MOD_STRIP=1 modules_install
+ 	rm -f "${pdir}/lib/modules/${KERNELRELEASE}/build"

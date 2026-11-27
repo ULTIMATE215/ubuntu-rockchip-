@@ -1,0 +1,162 @@
+diff --git a/src/doctor.rs b/src/doctor.rs
+index dd9c19f..22285b0 100644
+--- a/src/doctor.rs
++++ b/src/doctor.rs
+@@ -115,7 +115,7 @@ pub async fn run() -> Result<(), String> {
+     let resolved = crate::capture_setting::pick_codec(true, true, crate::video_select::codec_force(selection.codec_pref), crate::video_select::hardware(selection.encoder));
+     line("resolved codec", format!("{resolved:?}"));
+     match crate::video::ffmpeg_encoders().await {
+-        Some(found) => line("ffmpeg encoders", if found.is_empty() { "none of libx264/libx265/nvenc/vaapi".to_owned() } else { found.join(", ") }),
++        Some(found) => line("ffmpeg encoders", if found.is_empty() { "none of libx264/libx265/nvenc/vaapi/rkmpp".to_owned() } else { found.join(", ") }),
+         None => line("ffmpeg encoders", "ffmpeg not runnable (install ffmpeg or set ffmpeg_root)"),
+     }
+     let mut version = crate::video::ffmpeg_command();
+diff --git a/src/main.rs b/src/main.rs
+index 611ab89..2055097 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -203,7 +203,7 @@ pub(crate) fn cli_pref_ok(which: &str, value: &str) -> bool {
+     if value.is_empty() { return false; }
+     let value = value.to_ascii_lowercase();
+     match which {
+-        "set-encoder" => matches!(value.as_str(), "auto" | "cpu" | "vaapi" | "nvenc"),
++        "set-encoder" => crate::video_select::parse_encoder(Some(&value)).is_some(),
+         "set-codec" => matches!(value.as_str(), "auto" | "h264" | "h265" | "hevc"),
+         _ => false,
+     }
+diff --git a/src/video.rs b/src/video.rs
+index 7b7d435..93f1f14 100644
+--- a/src/video.rs
++++ b/src/video.rs
+@@ -182,13 +182,14 @@ impl CompleteFrame {
+ const RTP_CLOCK: u64 = 90_000;
+ 
+ #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+-pub(crate) enum Encoder { Cpu, Nvenc, Vaapi }
++pub(crate) enum Encoder { Cpu, Nvenc, Vaapi, Rkmpp }
+ impl Encoder {
+     pub(crate) fn name_for(self, codec: VideoCodec) -> &'static str {
+         match (self, codec) {
+             (Self::Cpu, VideoCodec::H264) => "libx264", (Self::Cpu, VideoCodec::H265) => "libx265",
+             (Self::Nvenc, VideoCodec::H264) => "h264_nvenc", (Self::Nvenc, VideoCodec::H265) => "hevc_nvenc",
+             (Self::Vaapi, VideoCodec::H264) => "h264_vaapi", (Self::Vaapi, VideoCodec::H265) => "hevc_vaapi",
++            (Self::Rkmpp, VideoCodec::H264) => "h264_rkmpp", (Self::Rkmpp, VideoCodec::H265) => "hevc_rkmpp",
+         }
+     }
+ }
+@@ -197,7 +198,7 @@ pub(crate) fn nvidia_present() -> bool {
+ }
+ /// 真彩 (4:4:4): NVENC (in-process or FFmpeg) and libx264; h264_vaapi is 4:2:0 only.
+ /// A GPU without 4:4:4 NVENC falls back to libx264, which keeps 4:4:4.
+-pub(crate) fn full_chroma_for(encoder: Encoder) -> bool { encoder != Encoder::Vaapi }
++pub(crate) fn full_chroma_for(encoder: Encoder) -> bool { !matches!(encoder, Encoder::Vaapi | Encoder::Rkmpp) }
+ 
+ /// (-profile:v, -pix_fmt) for NVENC / libx264 / libx265: 4:4:4 (真彩) needs a 4:4:4 profile.
+ fn chroma_args(settings: &VideoSettings, encoder: Encoder) -> (&'static str, &'static str) {
+@@ -287,6 +288,16 @@ fn encoder_options(settings: &VideoSettings, encoder: Encoder, gop: &str, rgb: O
+     let cq = settings.cq().to_string();
+     let target = settings.max_kbps().map_or("16M".to_string(), |k| format!("{}k", k * 3 / 4));
+     if encoder == Encoder::Vaapi { return vaapi_options(settings, gop); }
++    if encoder == Encoder::Rkmpp {
++        let mut options: Vec<String> = ["-c:v", encoder.name_for(settings.codec), "-pix_fmt", "nv12",
++            "-g", gop, "-b:v", &target, "-maxrate", &maxrate, "-bufsize", &bufsize]
++            .into_iter().map(str::to_owned).collect();
++        // The H.264 reader uses AUDs to split the Annex B stream into pictures.
++        if settings.codec == VideoCodec::H264 {
++            options.extend(["-bsf:v".into(), "h264_metadata=aud=insert".into()]);
++        }
++        return options;
++    }
+     let (profile, pix_fmt) = chroma_args(settings, encoder);
+     if encoder == Encoder::Nvenc {
+         return ["-c:v", encoder.name_for(settings.codec), "-preset", "p4", "-tune", "ull",
+@@ -306,6 +317,20 @@ fn encoder_options(settings: &VideoSettings, encoder: Encoder, gop: &str, rgb: O
+     options.into_iter().map(str::to_owned).collect()
+ }
+ 
++#[test]
++fn rkmpp_encodes_nv12_and_inserts_h264_access_unit_delimiters() {
++    assert!(!full_chroma_for(Encoder::Rkmpp));
++    let h264 = VideoSettings { codec: VideoCodec::H264, ..Default::default() };
++    let args = encoder_options(&h264, Encoder::Rkmpp, "60", None);
++    assert!(args.windows(2).any(|a| a == ["-c:v", "h264_rkmpp"]));
++    assert!(args.windows(2).any(|a| a == ["-pix_fmt", "nv12"]));
++    assert!(args.windows(2).any(|a| a == ["-bsf:v", "h264_metadata=aud=insert"]));
++    let hevc = VideoSettings { codec: VideoCodec::H265, ..Default::default() };
++    let args = encoder_options(&hevc, Encoder::Rkmpp, "60", None);
++    assert!(args.windows(2).any(|a| a == ["-c:v", "hevc_rkmpp"]));
++    assert!(!args.iter().any(|a| a == "-bsf:v"));
++}
++
+ /// Filter chain for a capture of `source` size (None when the input size is not known yet, e.g.
+ /// the fixed-input probe). H.264/HEVC 4:2:0 encoders — and NVENC's surface allocation — require
+ /// even frame dimensions, but the captured size is not always even: the portal backend reports the
+@@ -364,7 +389,7 @@ pub async fn ffmpeg_encoders() -> Option<Vec<&'static str>> {
+     ffmpeg.args(["-hide_banner", "-encoders"]).kill_on_drop(true);
+     let output = tokio::time::timeout(Duration::from_secs(5), ffmpeg.output()).await.ok()?.ok()?;
+     let text = String::from_utf8_lossy(&output.stdout);
+-    Some(["libx264", "libx265", "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi"].into_iter()
++    Some(["libx264", "libx265", "h264_nvenc", "hevc_nvenc", "h264_vaapi", "hevc_vaapi", "h264_rkmpp", "hevc_rkmpp"].into_iter()
+         .filter(|name| text.split_whitespace().any(|word| word == *name)).collect())
+ }
+ 
+@@ -786,6 +811,7 @@ async fn read_inprocess(
+ fn buffer_kbits(max_kbps: u32, encoder: Encoder) -> u32 {
+     let env = match encoder {
+         Encoder::Cpu => return max_kbps.clamp(500, 8000),
++        Encoder::Rkmpp => return max_kbps,
+         Encoder::Vaapi => "UU_VAAPI_BUFFER_MS",
+         Encoder::Nvenc => "UU_NVENC_BUFFER_MS",
+     };
+@@ -857,7 +883,8 @@ async fn read_encoder_with(
+     let cq = settings.cq().to_string();
+     // x11grab delivers bgr0; the Wayland/portal/KMS pipe is bgra.
+     let rgb = nvenc_rgb_input(&settings, encoder, if wayland { "bgra" } else { "bgr0" });
+-    log::info!("Desktop encoder: display={} source={} output={:?} fps={} cq={} maxrate={} encoder={} source={} pix_fmt={} low_latency=true",display,size,settings.output,settings.fps,cq,maxrate,encoder.name_for(settings.codec),crate::video_select::encoder_source_label(selection.encoder_source),if encoder == Encoder::Vaapi { "nv12" } else { rgb.unwrap_or(chroma_args(&settings, encoder).1) });
++    let pix_fmt = if matches!(encoder, Encoder::Vaapi | Encoder::Rkmpp) { "nv12" } else { rgb.unwrap_or(chroma_args(&settings, encoder).1) };
++    log::info!("Desktop encoder: display={} source={} output={:?} fps={} cq={} maxrate={} encoder={} source={} pix_fmt={} low_latency=true",display,size,settings.output,settings.fps,cq,maxrate,encoder.name_for(settings.codec),crate::video_select::encoder_source_label(selection.encoder_source),pix_fmt);
+     // A bundled FFmpeg prefix (config ffmpeg_root / UU_FFMPEG_ROOT) or `ffmpeg` on PATH.
+     let ffmpeg = ffmpeg_spec();
+     let mut command = ffmpeg.command();
+diff --git a/src/video_select.rs b/src/video_select.rs
+index a3c1d94..5ce1801 100644
+--- a/src/video_select.rs
++++ b/src/video_select.rs
+@@ -39,6 +39,7 @@ pub fn parse_encoder(value: Option<&str>) -> Option<Option<Encoder>> {
+         Some(v) if v == "cpu" => Some(Some(Encoder::Cpu)),
+         Some(v) if v == "vaapi" => Some(Some(Encoder::Vaapi)),
+         Some(v) if v == "nvenc" => Some(Some(Encoder::Nvenc)),
++        Some(v) if v == "rkmpp" => Some(Some(Encoder::Rkmpp)),
+         Some(_) => None,
+     }
+ }
+@@ -356,7 +357,7 @@ pub fn resolve_pair(
+     let (encoder, encoder_source) = match parse_encoder(enc_setting) {
+         Some(Some(e)) => (e, Source::Setting),
+         None => {
+-            log::warn!("Ignoring video_encoder value (not auto/cpu/vaapi/nvenc)");
++            log::warn!("Ignoring video_encoder value (expected auto/cpu/vaapi/nvenc/rkmpp)");
+             pick_encoder(enc_env, nvidia, probed)
+         }
+         Some(None) => pick_encoder(enc_env, nvidia, probed),
+@@ -381,7 +382,7 @@ fn pick_encoder(env: Option<&str>, nvidia: bool, probed: Option<&ProbeReport>) -
+     match parse_encoder(env) {
+         Some(Some(e)) => (e, Source::Env),
+         None => {
+-            log::warn!("Ignoring UU_VIDEO_ENCODER value (not auto/cpu/vaapi/nvenc)");
++            log::warn!("Ignoring UU_VIDEO_ENCODER value (expected auto/cpu/vaapi/nvenc/rkmpp)");
+             (auto_encoder(nvidia, probed), Source::Auto)
+         }
+         Some(None) => (auto_encoder(nvidia, probed), Source::Auto),
+diff --git a/src/webrtc.rs b/src/webrtc.rs
+index 0300d26..07171db 100644
+--- a/src/webrtc.rs
++++ b/src/webrtc.rs
+@@ -364,6 +364,7 @@ impl WebRtcSession {
+                         let encoder_impl = match encoder {
+                             crate::video::Encoder::Nvenc => "NVIDIA NVENC",
+                             crate::video::Encoder::Vaapi => "VAAPI",
++                            crate::video::Encoder::Rkmpp => "Rockchip MPP",
+                             crate::video::Encoder::Cpu => "Software",
+                         };
+                         if let Err(e) = sig.emit_event(crate::capability::FORWARD_SETTING_EVENT,

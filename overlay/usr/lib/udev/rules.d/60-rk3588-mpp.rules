@@ -1,0 +1,2 @@
+SUBSYSTEM=="misc", KERNEL=="mpp_service", GROUP="video", MODE="0660"
+SUBSYSTEM=="dma_heap", KERNEL=="default_cma_region", GROUP="video", MODE="0660"

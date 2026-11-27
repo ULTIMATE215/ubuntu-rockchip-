@@ -42,34 +42,44 @@ if [[ ${LAUNCHPAD} != "Y" ]]; then
         exit 1
     fi
 
-    linux_image_package="$(basename "$(find linux-image-*.deb | sort | tail -n1)")"
-    if [ ! -e "$linux_image_package" ]; then
-        echo "Error: could not find the linux image package"
-        exit 1
-    fi
+    if [[ ${KERNEL_TRACK:-} == stable ]]; then
+        source ../config/rk3588-stable.sh
+        for package in "${STABLE_IMAGE_DEB}" "${STABLE_HEADERS_DEB}"; do
+            if [[ ! -f ${STABLE_KERNEL_PACKAGE_DIR}/${package} ]]; then
+                echo "Missing stable kernel package ${package}" >&2
+                exit 1
+            fi
+        done
+    else
+        linux_image_package="$(basename "$(find linux-image-*.deb | sort | tail -n1)")"
+        if [ ! -e "$linux_image_package" ]; then
+            echo "Error: could not find the linux image package"
+            exit 1
+        fi
 
-    linux_headers_package="$(basename "$(find linux-headers-*.deb | sort | tail -n1)")"
-    if [ ! -e "$linux_headers_package" ]; then
-        echo "Error: could not find the linux headers package"
-        exit 1
-    fi
+        linux_headers_package="$(basename "$(find linux-headers-*.deb | sort | tail -n1)")"
+        if [ ! -e "$linux_headers_package" ]; then
+            echo "Error: could not find the linux headers package"
+            exit 1
+        fi
 
-    linux_modules_package="$(basename "$(find linux-modules-*.deb | sort | tail -n1)")"
-    if [ ! -e "$linux_modules_package" ]; then
-        echo "Error: could not find the linux modules package"
-        exit 1
-    fi
+        linux_modules_package="$(basename "$(find linux-modules-*.deb | sort | tail -n1)")"
+        if [ ! -e "$linux_modules_package" ]; then
+            echo "Error: could not find the linux modules package"
+            exit 1
+        fi
 
-    linux_buildinfo_package="$(basename "$(find linux-buildinfo-*.deb | sort | tail -n1)")"
-    if [ ! -e "$linux_buildinfo_package" ]; then
-        echo "Error: could not find the linux buildinfo package"
-        exit 1
-    fi
+        linux_buildinfo_package="$(basename "$(find linux-buildinfo-*.deb | sort | tail -n1)")"
+        if [ ! -e "$linux_buildinfo_package" ]; then
+            echo "Error: could not find the linux buildinfo package"
+            exit 1
+        fi
 
-    linux_rockchip_headers_package="$(basename "$(find linux-rockchip-headers-*.deb | sort | tail -n1)")"
-    if [ ! -e "$linux_rockchip_headers_package" ]; then
-        echo "Error: could not find the linux rockchip headers package"
-        exit 1
+        linux_rockchip_headers_package="$(basename "$(find linux-rockchip-headers-*.deb | sort | tail -n1)")"
+        if [ ! -e "$linux_rockchip_headers_package" ]; then
+            echo "Error: could not find the linux rockchip headers package"
+            exit 1
+        fi
     fi
 fi
 
@@ -134,6 +144,14 @@ setup_mountpoint $chroot_dir
 # Update packages
 chroot $chroot_dir apt-get update
 chroot $chroot_dir apt-get -y upgrade
+
+# Resolute's RKVDEC and Hantro drivers use the V4L2 Request API.
+case "${SUITE}:${BOARD_SOC}" in
+    'resolute:Rockchip RK3588'|'resolute:Rockchip RK3588S'|'resolute:Rockchip RK3588S2')
+        chroot "${chroot_dir}" apt-get -o Acquire::Retries=3 -y install --no-install-recommends \
+            gstreamer1.0-plugins-bad gstreamer1.0-tools v4l-utils
+        ;;
+esac
     
 # Run config hook to handle board specific changes
 if [[ $(type -t config_image_hook__"${BOARD}") == function ]]; then
@@ -150,14 +168,23 @@ else
     chroot ${chroot_dir} apt-get install -y "/tmp/${uboot_package}"
     chroot ${chroot_dir} apt-mark hold "$(echo "${uboot_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
 
-    cp "${linux_image_package}" "${linux_headers_package}" "${linux_modules_package}" "${linux_buildinfo_package}" "${linux_rockchip_headers_package}" ${chroot_dir}/tmp/
-    chroot ${chroot_dir} /bin/bash -c "apt-get -y purge \$(dpkg --list | grep -Ei 'linux-image|linux-headers|linux-modules|linux-rockchip' | awk '{ print \$2 }')"
-    # chroot ${chroot_dir} /bin/bash -c "dpkg -i /tmp/{${linux_image_package},${linux_modules_package},${linux_buildinfo_package},${linux_rockchip_headers_package}}"
-    chroot ${chroot_dir} /bin/bash -c "apt-get install -y /tmp/{${linux_image_package},${linux_modules_package},${linux_buildinfo_package},${linux_rockchip_headers_package}}"
-    chroot ${chroot_dir} apt-mark hold "$(echo "${linux_image_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
-    chroot ${chroot_dir} apt-mark hold "$(echo "${linux_modules_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
-    chroot ${chroot_dir} apt-mark hold "$(echo "${linux_buildinfo_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
-    chroot ${chroot_dir} apt-mark hold "$(echo "${linux_rockchip_headers_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
+    if [[ ${KERNEL_TRACK:-} == stable ]]; then
+        cp "${STABLE_KERNEL_PACKAGE_DIR}/${STABLE_IMAGE_DEB}" \
+            "${STABLE_KERNEL_PACKAGE_DIR}/${STABLE_HEADERS_DEB}" "${chroot_dir}/tmp/"
+        chroot "${chroot_dir}" apt-get install -y "/tmp/${STABLE_IMAGE_DEB}" "/tmp/${STABLE_HEADERS_DEB}"
+        if [[ ${BOARD} == orangepi-5-plus ]]; then
+            install -D -m 0644 "${overlay_dir}/usr/lib/udev/rules.d/60-rk3588-mpp.rules" \
+                "${chroot_dir}/usr/lib/udev/rules.d/60-rk3588-mpp.rules"
+        fi
+    else
+        cp "${linux_image_package}" "${linux_headers_package}" "${linux_modules_package}" "${linux_buildinfo_package}" "${linux_rockchip_headers_package}" ${chroot_dir}/tmp/
+        chroot ${chroot_dir} /bin/bash -c "apt-get -y purge \$(dpkg --list | grep -Ei 'linux-image|linux-headers|linux-modules|linux-rockchip' | awk '{ print \$2 }')"
+        chroot ${chroot_dir} /bin/bash -c "apt-get install -y /tmp/{${linux_image_package},${linux_modules_package},${linux_buildinfo_package},${linux_rockchip_headers_package}}"
+        chroot ${chroot_dir} apt-mark hold "$(echo "${linux_image_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
+        chroot ${chroot_dir} apt-mark hold "$(echo "${linux_modules_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
+        chroot ${chroot_dir} apt-mark hold "$(echo "${linux_buildinfo_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
+        chroot ${chroot_dir} apt-mark hold "$(echo "${linux_rockchip_headers_package}" | sed -rn 's/(.*)_[[:digit:]].*/\1/p')"
+    fi
 fi
 
 # Update the initramfs

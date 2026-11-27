@@ -17,6 +17,10 @@ if [[ -z ${SUITE} ]]; then
     exit 1
 fi
 
+if [[ ${KERNEL_TRACK:-} == stable ]]; then
+    exec bash ../scripts/build-resolute-stable-kernel.sh
+fi
+
 # shellcheck source=/dev/null
 source "../config/suites/${SUITE}.sh"
 

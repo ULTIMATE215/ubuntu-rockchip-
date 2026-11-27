@@ -25,7 +25,110 @@ Ubuntu Rockchip is a community project porting Ubuntu to Rockchip hardware with 
 * Chromium browser with smooth 4k youtube video playback
 * MPV video player capable of smooth 4k video playback
 
+## RK3588 hardware video decoding on Ubuntu 26.04
+
+Resolute desktop and server images for RK3588, RK3588S and RK3588S2 include
+GStreamer's `v4l2codecs` plugin for H.264, H.265 and AV1 hardware decoding via
+the kernel's V4L2 Request API. The default `ubuntu` account has access through
+the `video` group.
+
+On an existing Resolute installation with the project's 7.0 Rockchip kernel,
+install the same packages.
+
+```sh
+sudo apt install --no-install-recommends gstreamer1.0-plugins-bad gstreamer1.0-tools v4l-utils
+```
+
+List the available hardware decoders and test an H.265 MP4 clip without a
+display. The explicit `v4l2slh265dec` element requires hardware decoding.
+
+```sh
+gst-inspect-1.0 v4l2codecs
+gst-launch-1.0 -v filesrc location=sample-hevc.mp4 ! qtdemux ! h265parse ! \
+    v4l2slh265dec ! fakesink sync=false
+```
+
+For 4K H.264, GStreamer 1.28 may automatically select the Hantro decoder, which
+is limited to 1920 × 1088. Use `v4l2-ctl --list-devices` to find the `rkvdec`
+video node and inspect the H.264 elements with `gst-inspect-1.0` to find the
+one whose `video-device` matches. If it is `v4l2slvideo3h264dec`, test it
+explicitly.
+
+```sh
+gst-launch-1.0 -v filesrc location=sample-h264.mp4 ! qtdemux ! h264parse ! \
+    v4l2slvideo3h264dec ! fakesink sync=false
+```
+
 ## Installation
+
+### RK3588 H.264 encoding on Orange Pi 5 Plus
+
+On Ubuntu 26.04, the stable kernel profile builds Linux 7.3.6 with the
+VEPU580 RKVENC driver and the Orange Pi 5 Plus device tree for one encoder
+core. The FFmpeg package combines the `h264_rkmpp` encoder, V4L2 Request
+decoders, PulseAudio capture and Opus. The UU package adds the explicit
+`rkmpp` encoder selection to uu-remote-linux 0.2.46.
+
+Build the packages on ARM64 Ubuntu 26.04 with the dependencies listed in
+the [stable package workflow](.github/workflows/build-resolute-stable.yml).
+
+```sh
+sudo ./build.sh --suite=resolute --kernel=stable --kernel-only
+sudo bash scripts/build-rk3588-media.sh
+```
+
+On an existing Ubuntu 26.04 installation, install the four ARM64 packages.
+The workflow publishes the same packages as downloadable artifacts.
+
+```sh
+sudo apt install \
+    ./build/stable-kernel/linux-image-7.3.6-rockchip_7.3.6-1_arm64.deb \
+    ./build/stable-kernel/linux-headers-7.3.6-rockchip_7.3.6-1_arm64.deb \
+    ./build/rk3588-ffmpeg_9.1-1_arm64.deb \
+    ./build/uu-remote-linux_0.2.46+rk3588.1_arm64.deb
+```
+
+To build a fresh Orange Pi 5 Plus desktop image with the stable kernel, run
+`sudo ./build.sh --suite=resolute --board=orangepi-5-plus --flavor=desktop --kernel=stable`.
+Install the media and UU packages after booting that image.
+
+On an extlinux installation, run `sudo u-boot-update` and select the new
+kernel at the next boot. Check that `uname -r` reports `7.3.6-rockchip`.
+The account running UU Remote needs access to `/dev/mpp_service` and
+`/dev/dma_heap/default_cma_region` through the `video` group. If you add
+the account to this group, sign out and back in to refresh its permissions.
+Test the encoder and decoder with a synthetic clip.
+
+```sh
+ls -l /dev/mpp_service /dev/dma_heap/default_cma_region
+media_ffmpeg=/opt/rk3588-media/bin/ffmpeg
+clip=$(mktemp --suffix=.h264)
+"$media_ffmpeg" -y -f lavfi -i 'testsrc2=s=1920x1080:r=30' \
+    -frames:v 60 -pix_fmt nv12 -g 30 -c:v h264_rkmpp -f h264 "$clip" &&
+    "$media_ffmpeg" -hide_banner -v verbose -xerror \
+        -hwaccel v4l2request -hwaccel_output_format drm_prime -i "$clip" -an -f null -
+```
+
+Set `UU_FFMPEG_ROOT=/opt/rk3588-media` in the user service with
+`systemctl --user edit uuremote-native.service`.
+
+```ini
+[Service]
+Environment=UU_FFMPEG_ROOT=/opt/rk3588-media
+```
+
+```sh
+systemctl --user restart uuremote-native.service
+uuremote-server set-encoder rkmpp
+uuremote-server set-codec h264
+```
+
+During a remote session, look for `encoder=h264_rkmpp` and frames being sent
+in `journalctl --user -u uuremote-native.service`. A `switching scoped encoder
+to CPU` warning identifies a software fallback. Desktop capture and conversion
+to NV12 still use the CPU.
+
+### Writing an image
 
 Make sure you use a good, reliable, and fast SD card. For example, suppose you encounter boot or stability troubles. Most of the time, this is due to either an insufficient power supply or related to your SD card (bad card, bad card reader, something went wrong when burning the image, or the card is too slow).
 
