@@ -61,6 +61,61 @@ gst-launch-1.0 -v filesrc location=sample-h264.mp4 ! qtdemux ! h264parse ! \
 
 ## Installation
 
+### RK3588 H.264 encoding on Orange Pi 5 Plus
+
+On Ubuntu 26.04, the stable kernel profile builds Linux 7.3.6 with the
+VEPU580 RKVENC driver and the Orange Pi 5 Plus device tree for one encoder
+core. The FFmpeg package combines the `h264_rkmpp` encoder, V4L2 Request
+decoders, PulseAudio capture and Opus. The UU package adds the explicit
+`rkmpp` encoder selection to uu-remote-linux 0.2.46.
+
+Build the packages on ARM64 Ubuntu 26.04 with the dependencies listed in
+the [stable package workflow](.github/workflows/build-resolute-stable.yml).
+
+```sh
+sudo ./build.sh --suite=resolute --kernel=stable --kernel-only
+sudo bash scripts/build-rk3588-media.sh
+```
+
+For an existing Ubuntu 26.04 installation, install the image and headers
+from `build/stable-kernel/`, then install `rk3588-ffmpeg` and
+`uu-remote-linux` from `build/`. The workflow builds these four packages
+as downloadable artifacts. An Orange Pi 5 Plus image can also be built
+with `sudo ./build.sh --suite=resolute --board=orangepi-5-plus --flavor=desktop --kernel=stable`.
+
+On an extlinux installation, update the menu with `sudo u-boot-update`.
+Boot the new kernel and check that `uname -r` reports `7.3.6-rockchip`.
+Verify that both the MPP device and CMA heap are present, then encode and
+decode a synthetic clip.
+
+```sh
+ls -l /dev/mpp_service /dev/dma_heap/default_cma_region
+clip=$(mktemp --suffix=.h264)
+/opt/rk3588-media/bin/ffmpeg -y -f lavfi -i 'testsrc2=s=1920x1080:r=30' \
+    -frames:v 60 -pix_fmt nv12 -g 30 -c:v h264_rkmpp -f h264 "$clip" &&
+    /opt/rk3588-media/bin/ffmpeg -v error -xerror -i "$clip" -f null -
+```
+
+Set `UU_FFMPEG_ROOT=/opt/rk3588-media` in the user service with
+`systemctl --user edit uuremote-native.service`.
+
+```ini
+[Service]
+Environment=UU_FFMPEG_ROOT=/opt/rk3588-media
+```
+
+```sh
+systemctl --user restart uuremote-native.service
+uuremote-server set-encoder rkmpp
+uuremote-server set-codec h264
+```
+
+During a remote session, the live FFmpeg process should use `-c:v h264_rkmpp`
+and the service log should show frames being sent. The encoder takes NV12
+frames, so desktop capture and color conversion still use the CPU.
+
+### Writing an image
+
 Make sure you use a good, reliable, and fast SD card. For example, suppose you encounter boot or stability troubles. Most of the time, this is due to either an insufficient power supply or related to your SD card (bad card, bad card reader, something went wrong when burning the image, or the card is too slow).
 
 Download the Ubuntu image for your specific board from the latest [release](https://github.com/Joshua-Riek/ubuntu-rockchip/releases) on GitHub or from the dedicated download [website](https://joshua-riek.github.io/ubuntu-rockchip-download/). Then write the xz compressed image (no previous unpacking necessary) to your SD card using [USBimager](https://bztsrc.gitlab.io/usbimager/) or [balenaEtcher](https://www.balena.io/etcher) since, unlike other tools, these can validate burning results, saving you from corrupted SD card contents.

@@ -15,6 +15,7 @@ Required arguments:
   -f, --flavor=FLAVOR    ubuntu flavor
 
 Optional arguments:
+      --kernel=stable   use the pinned mainline stable kernel on Resolute
   -h,  --help            show this help message and exit
   -c,  --clean           clean the build directory
   -ko, --kernel-only     only compile the kernel
@@ -66,6 +67,10 @@ while [ "$#" -gt 0 ]; do
             export KERNEL_ONLY=Y
             shift
             ;;
+        --kernel=stable)
+            export KERNEL_TRACK=stable
+            shift
+            ;;
         -uo|--uboot-only)
             export UBOOT_ONLY=Y
             shift
@@ -95,6 +100,11 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
+
+if [[ ${KERNEL_TRACK:-} == stable && ( ${SUITE:-} != resolute || ${LAUNCHPAD:-} == Y ) ]]; then
+    echo "The stable kernel requires --suite=resolute and a local kernel build" >&2
+    exit 1
+fi
 
 if [ "${SUITE}" == "help" ]; then
     for file in config/suites/*; do
@@ -211,7 +221,13 @@ fi
 
 # Build the Linux kernel if not found
 if [[ ${LAUNCHPAD} != "Y" ]]; then
-    if [[ ! -e "$(find build/linux-image-*.deb | sort | tail -n1)" || ! -e "$(find build/linux-headers-*.deb | sort | tail -n1)" ]]; then
+    if [[ ${KERNEL_TRACK:-} == stable ]]; then
+        source config/rk3588-stable.sh
+        if [[ ! -f "build/${STABLE_KERNEL_PACKAGE_DIR}/${STABLE_IMAGE_DEB}" \
+            || ! -f "build/${STABLE_KERNEL_PACKAGE_DIR}/${STABLE_HEADERS_DEB}" ]]; then
+            ./scripts/build-kernel.sh
+        fi
+    elif [[ ! -e "$(find build/linux-image-*.deb | sort | tail -n1)" || ! -e "$(find build/linux-headers-*.deb | sort | tail -n1)" ]]; then
         ./scripts/build-kernel.sh
     fi
 fi
