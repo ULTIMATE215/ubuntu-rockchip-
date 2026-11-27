@@ -7,7 +7,7 @@ cd "$(dirname -- "$(readlink -f -- "$0")")"
 
 usage() {
 cat << HEREDOC
-Usage: $0 --board=[orangepi-5] --suite=[jammy|noble] --flavor=[server|desktop]
+Usage: $0 --board=[orangepi-5] --suite=[jammy|noble|resolute] --flavor=[server|desktop]
 
 Required arguments:
   -b, --board=BOARD      target board 
@@ -178,23 +178,19 @@ if [ "${KERNEL_ONLY}" == "Y" ]; then
     exit 0
 fi
 
+# Standalone Resolute builds also use the Ubuntu Base rootfs builder.
+rootfs_script=./scripts/build-rootfs.sh
+case "${SUITE}:${ROOTFS_ONLY}" in
+    jammy:*|noble:*) ;;
+    resolute:*|*:Y) rootfs_script=./scripts/build-rootfs-next.sh ;;
+esac
+
 if [ "${ROOTFS_ONLY}" == "Y" ]; then
     if [ -z "${SUITE}" ] || [ -z "${FLAVOR}" ]; then
         usage
         exit 1
     fi
-    chmod +x ./scripts/build-rootfs-next.sh
-    chmod +x ./scripts/build-rootfs.sh
-    # ==============================
-    # 稳健版判断：只指定旧版本，未来自动通用
-    # ==============================
-    if [ "${SUITE}" == "jammy" ] || [ "${SUITE}" == "noble" ]; then
-        # 22.04 / 24.04 → PPA 专用脚本
-        ./scripts/build-rootfs.sh
-    else
-        # 26.04 / 28.04 等新版本 → 通用驱动脚本
-        ./scripts/build-rootfs-next.sh
-    fi
+    bash "${rootfs_script}"
     exit 0
 fi
 
@@ -228,7 +224,7 @@ if [[ ${LAUNCHPAD} != "Y" ]]; then
 fi
 
 # Create the root filesystem
-./scripts/build-rootfs.sh
+bash "${rootfs_script}"
 
 # Create the disk image
 ./scripts/config-image.sh

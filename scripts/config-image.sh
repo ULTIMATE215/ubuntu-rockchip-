@@ -134,6 +134,14 @@ setup_mountpoint $chroot_dir
 # Update packages
 chroot $chroot_dir apt-get update
 chroot $chroot_dir apt-get -y upgrade
+
+# Resolute's RKVDEC and Hantro drivers use the V4L2 Request API.
+case "${SUITE}:${BOARD_SOC}" in
+    'resolute:Rockchip RK3588'|'resolute:Rockchip RK3588S'|'resolute:Rockchip RK3588S2')
+        chroot "${chroot_dir}" apt-get -o Acquire::Retries=3 -y install --no-install-recommends \
+            gstreamer1.0-plugins-bad gstreamer1.0-tools v4l-utils
+        ;;
+esac
     
 # Run config hook to handle board specific changes
 if [[ $(type -t config_image_hook__"${BOARD}") == function ]]; then

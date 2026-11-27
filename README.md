@@ -25,6 +25,40 @@ Ubuntu Rockchip is a community project porting Ubuntu to Rockchip hardware with 
 * Chromium browser with smooth 4k youtube video playback
 * MPV video player capable of smooth 4k video playback
 
+## RK3588 hardware video decoding on Ubuntu 26.04
+
+Resolute desktop and server images for RK3588, RK3588S and RK3588S2 include
+GStreamer's `v4l2codecs` plugin for H.264, H.265 and AV1 hardware decoding via
+the kernel's V4L2 Request API. The default `ubuntu` account has access through
+the `video` group.
+
+On an existing Resolute installation with the project's 7.0 Rockchip kernel,
+install the same packages.
+
+```sh
+sudo apt install --no-install-recommends gstreamer1.0-plugins-bad gstreamer1.0-tools v4l-utils
+```
+
+List the available hardware decoders and test an H.265 MP4 clip without a
+display. The explicit `v4l2slh265dec` element requires hardware decoding.
+
+```sh
+gst-inspect-1.0 v4l2codecs
+gst-launch-1.0 -v filesrc location=sample-hevc.mp4 ! qtdemux ! h265parse ! \
+    v4l2slh265dec ! fakesink sync=false
+```
+
+For 4K H.264, GStreamer 1.28 may automatically select the Hantro decoder, which
+is limited to 1920 × 1088. Use `v4l2-ctl --list-devices` to find the `rkvdec`
+video node and inspect the H.264 elements with `gst-inspect-1.0` to find the
+one whose `video-device` matches. If it is `v4l2slvideo3h264dec`, test it
+explicitly.
+
+```sh
+gst-launch-1.0 -v filesrc location=sample-h264.mp4 ! qtdemux ! h264parse ! \
+    v4l2slvideo3h264dec ! fakesink sync=false
+```
+
 ## Installation
 
 Make sure you use a good, reliable, and fast SD card. For example, suppose you encounter boot or stability troubles. Most of the time, this is due to either an insufficient power supply or related to your SD card (bad card, bad card reader, something went wrong when burning the image, or the card is too slow).
