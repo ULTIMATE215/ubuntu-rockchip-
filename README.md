@@ -77,23 +77,36 @@ sudo ./build.sh --suite=resolute --kernel=stable --kernel-only
 sudo bash scripts/build-rk3588-media.sh
 ```
 
-For an existing Ubuntu 26.04 installation, install the image and headers
-from `build/stable-kernel/`, then install `rk3588-ffmpeg` and
-`uu-remote-linux` from `build/`. The workflow builds these four packages
-as downloadable artifacts. An Orange Pi 5 Plus image can also be built
-with `sudo ./build.sh --suite=resolute --board=orangepi-5-plus --flavor=desktop --kernel=stable`.
+On an existing Ubuntu 26.04 installation, install the four ARM64 packages.
+The workflow publishes the same packages as downloadable artifacts.
 
-On an extlinux installation, update the menu with `sudo u-boot-update`.
-Boot the new kernel and check that `uname -r` reports `7.3.6-rockchip`.
-Verify that both the MPP device and CMA heap are present, then encode and
-decode a synthetic clip.
+```sh
+sudo apt install \
+    ./build/stable-kernel/linux-image-7.3.6-rockchip_7.3.6-1_arm64.deb \
+    ./build/stable-kernel/linux-headers-7.3.6-rockchip_7.3.6-1_arm64.deb \
+    ./build/rk3588-ffmpeg_9.1-1_arm64.deb \
+    ./build/uu-remote-linux_0.2.46+rk3588.1_arm64.deb
+```
+
+To build a fresh Orange Pi 5 Plus desktop image with the stable kernel, run
+`sudo ./build.sh --suite=resolute --board=orangepi-5-plus --flavor=desktop --kernel=stable`.
+Install the media and UU packages after booting that image.
+
+On an extlinux installation, run `sudo u-boot-update` and select the new
+kernel at the next boot. Check that `uname -r` reports `7.3.6-rockchip`.
+The account running UU Remote needs access to `/dev/mpp_service` and
+`/dev/dma_heap/default_cma_region` through the `video` group. If you add
+the account to this group, sign out and back in to refresh its permissions.
+Test the encoder and decoder with a synthetic clip.
 
 ```sh
 ls -l /dev/mpp_service /dev/dma_heap/default_cma_region
+media_ffmpeg=/opt/rk3588-media/bin/ffmpeg
 clip=$(mktemp --suffix=.h264)
-/opt/rk3588-media/bin/ffmpeg -y -f lavfi -i 'testsrc2=s=1920x1080:r=30' \
+"$media_ffmpeg" -y -f lavfi -i 'testsrc2=s=1920x1080:r=30' \
     -frames:v 60 -pix_fmt nv12 -g 30 -c:v h264_rkmpp -f h264 "$clip" &&
-    /opt/rk3588-media/bin/ffmpeg -v error -xerror -i "$clip" -f null -
+    "$media_ffmpeg" -hide_banner -v verbose -xerror \
+        -hwaccel v4l2request -hwaccel_output_format drm_prime -i "$clip" -an -f null -
 ```
 
 Set `UU_FFMPEG_ROOT=/opt/rk3588-media` in the user service with
@@ -110,9 +123,10 @@ uuremote-server set-encoder rkmpp
 uuremote-server set-codec h264
 ```
 
-During a remote session, the live FFmpeg process should use `-c:v h264_rkmpp`
-and the service log should show frames being sent. The encoder takes NV12
-frames, so desktop capture and color conversion still use the CPU.
+During a remote session, look for `encoder=h264_rkmpp` and frames being sent
+in `journalctl --user -u uuremote-native.service`. A `switching scoped encoder
+to CPU` warning identifies a software fallback. Desktop capture and conversion
+to NV12 still use the CPU.
 
 ### Writing an image
 
